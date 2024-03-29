@@ -1,0 +1,307 @@
+# THOMASSIN Pablo 
+## Real VAR - Advanced Time Series Analysis
+In the following document you can find the code for my Real VAR project as well as all the associated graphics.
+First, we will import the necessary data and packages. Assuming this will be pre-installed on your machine locally.
+### Packages loading
+```{r setup, warning=FALSE, message=FALSE}
+library(fredr)
+library(urca)
+library(tseries)
+library(vars)
+```
+### Data loading
+We start by entering our API key to be able to connect to the FRED database:
+```{r}
+fredr_set_key("f48f1512254cd4f5e0230f3b6826d7db")
+```
+We can then define the time range that we wish to study. Here we will take the data from 2006 to 2023.
+```{r}
+start_date <- as.Date("2006-01-01")
+end_date <- as.Date("2023-03-01")  # Replace with the current date or any desired end date
+```
+We can now import the FRED data. Here according to the statement : "the slope of the yield curve, the 10-Year Breakeven Inflation Rate
+and the VIX index in the United States"
+```{r}
+slope_yield_curve <- fredr(
+  series_id = "T10Y2Y",
+  observation_start = start_date,
+  observation_end = end_date
+)
+
+breakeven_inflation <- fredr(
+  series_id = "T10YIE",
+  observation_start = start_date,
+  observation_end = end_date
+)
+
+vix_index <- fredr(
+  series_id = "VIXCLS",
+  observation_start = start_date,
+  observation_end = end_date
+)
+```
+We can now merge the data into a single dataframe. Named data and formating the type of our column Date.
+```{r}
+data_df <- data.frame(date = as.Date(slope_yield_curve$date),
+           slope_yield_curve = slope_yield_curve$value,
+           breakeven_inflation = breakeven_inflation$value,
+           vix_index = vix_index$value)
+
+```
+Let's print our data in three graphics to see the evolution of our variables over time.
+```{r}
+# Create separate plots
+par(mfrow = c(3, 1), mar = c(4, 4, 2, 2))  # Set up a 3x1 grid for plots
+
+# Plot 1: Slope of the Yield Curve
+plot(data_df$date, data_df$slope_yield_curve, type = "l", xlab = "Date", ylab = "Slope of the Yield Curve", main = "Slope of the Yield Curve")
+
+# Plot 2: 10-Year Breakeven Inflation Rate
+plot(data_df$date, data_df$breakeven_inflation, type = "l", xlab = "Date", ylab = "10-Year Breakeven Inflation Rate", main = "10-Year Breakeven Inflation Rate")
+
+# Plot 3: VIX Index
+plot(data_df$date, data_df$vix_index, type = "l", xlab = "Date", ylab = "VIX Index", main = "VIX Index")
+```
+
+We can now see the evolution of our variables over time. We can see that the slope of the yield curve has been decreasing since 2006, the 10-Year Breakeven Inflation Rate has been increasing with residual down due to financial crisis (2008 and 2021) and the VIX Index has been fluctuating over time
+Thus the data depends of time and are not stationary. We will have to make them stationary to be able to use them in our VAR model.
+
+### Stationarity : ADF and Transformation
+We will now test the stationarity of our variables using the Augmented Dickey-Fuller test. We will also transform our variables to make them stationary if necessary.
+First let's derivate :
+```{r, warning=FALSE, message=FALSE}
+
+#Cleaning data
+data_df_no_na <- na.omit(data_df)
+
+#ADF Performed on the  data cleaned
+adf_test_slope <- adf.test(data_df_no_na$slope_yield_curve)
+adf_test_inflation <- adf.test(data_df_no_na$breakeven_inflation)
+adf_test_vix <- adf.test(data_df_no_na$vix_index)
+
+# Print the results
+print(adf_test_slope)
+print(adf_test_inflation)
+print(adf_test_vix)
+```
+#### Slope Yield Curve
+We can observe that we cannot reject the null hypothesis of a unit root, meaning the series is not stationary. With a high p-value (> 0.05), the data likely contains a time-based structure that needs to be addressed
+Then we will have to differentiate the series once again.
+```{r, warning=FALSE, message=FALSE}
+# For the slope of the yield curve
+slope_yield_curve_diff <- diff(data_df_no_na$slope_yield_curve)
+adf_test_slope_diff <- adf.test(slope_yield_curve_diff)
+print(adf_test_slope_diff)
+```
+Now we can finally observe that we can reject the null hypothesis of a unit root, meaning the series is stationary. The p-value is well below the 0.05 threshold, suggesting that the slope of the yield curve does not have a unit root based on the ADF test.
+```{r, warning=FALSE, message=FALSE}
+```
+#### Breakeven Inflation
+This result is on the borderline. Traditionally, a p-value < 0.05 is considered evidence against the null hypothesis, suggesting stationarity. However, at 0.08, it's close enough to merit careful consideration. Here we will just differentiate the series.
+```{r, warning=FALSE, message=FALSE}
+# For the 10-Year Breakeven Inflation Rate
+breakeven_inflation_diff <- diff(data_df_no_na$breakeven_inflation)
+adf_test_inflation_diff <- adf.test(breakeven_inflation_diff)
+print(adf_test_inflation_diff)
+```
+Now we can finally observe that we can reject the null hypothesis of a unit root, meaning the series is stationary. The p-value is well below the 0.05 threshold, suggesting that the 10-Year Breakeven Inflation Rate does not have a unit root based on the ADF test.
+```{r, warning=FALSE, message=FALSE}
+```
+#### VIX index
+This result indicates that we can reject the null hypothesis of a unit root, meaning the series is stationary. The p-value is well below the 0.05 threshold, suggesting that the VIX index does not have a unit root based on the ADF test.
+```{r, warning=FALSE, message=FALSE}
+```
+Then we obtain a new dataframe with the stationary variables.
+```{r}
+date_adjusted <- data_df_no_na$date[-1] # Assuming slope_yield_curve has a $date field
+
+# Now create the dataframe with adjusted lengths
+data_df_stationary <- data.frame(date = date_adjusted,
+                                 slope_yield_curve = slope_yield_curve_diff,
+                                 breakeven_inflation = breakeven_inflation_diff,
+                                 vix_index = data_df_no_na$vix_index[-1])
+```
+
+### Information Criteria and Lag Order Selection
+We will now use the VARselect function to select the optimal lag order for our VAR model. We will use the AIC, BIC, and HQIC information criteria to select the optimal lag order.
+```{r}
+data_df_clean <- na.omit(data_df_stationary)
+VARselect(data_df_clean[, -1], lag.max = 10, type = "both")
+```
+- AIC (Akaike Information Criterion): AIC is a measure of the relative quality of a statistical model for a given set of data. It balances the goodness of fit of the model against its complexity (the number of parameters in the model). A lower AIC suggests a better model. AIC is defined as: (AIC = 2k - 2\ln(L)), where (k) is the number of parameters, and (L) is the likelihood of the model.
+
+- HQ (Hannan-Quinn Criterion): Similar to AIC, the Hannan-Quinn criterion is another information criterion used to select the best model. It is more conservative than AIC, penalizing model complexity more strongly. It's defined as: (HQ = -2\ln(L) + 2k\ln(\ln(n))), where (n) is the sample size.
+
+- SC (Schwarz Criterion), also known as BIC (Bayesian Information Criterion): Like AIC, BIC seeks to balance the fit of the model against its complexity, but it applies a larger penalty for models with more parameters. It tends to favor simpler models than AIC. (BIC = -2\ln(L) + k\ln(n)).
+
+- FPE (Final Prediction Error): FPE estimates the prediction error of the model's forecasts. It accounts for both the model's fit to the historical data and its complexity. A lower FPE indicates a model with better predictive accuracy.
+
+What we can observ is that : 
+
+- AIC and FPE are indicating that a more complex model (with more lags) might better capture the dynamics in our data. These criteria are less penalizing for model complexity.
+
+- HQ and SC are recommending a simpler model (fewer lags), as they impose a heavier penalty on increasing the number of parameters, which helps to prevent overfitting.
+
+As we want to avoid overfitting, we will choose the lag order that minimizes the HQIC, which is the most conservative of the information criteria. Here, the optimal lag order is 2.
+```{r}
+optimal_p <- VARselect(data_df_clean[, -1], lag.max = 10, type = "both")$selection[2]
+print(optimal_p)
+```
+
+### VAR Model Fitting and Residual Diagnostics
+We will now fit a VAR model to our data using the optimal lag order of 2. We will then perform residual diagnostics to ensure that our model is a good fit for the data.
+```{r}
+var_model <- VAR(data_df_clean[, -1], p = optimal_p, type = "const")
+# Calculate the roots of the VAR model
+roots <- roots(var_model)
+
+print(summary(var_model))
+```
+```{r}
+print(roots)
+```
+The fact that the roots of our model are all inside the unit circle(lesser than 1) is a good sign. This means that our model is stable and that the process is covariance stationary. This is a necessary condition for the VAR model to be valid.
+As such let's estimate the VAR using vars packages
+```{r}
+
+```
+### Var Model using vars package
+As we did previously we will ensure the question is just highlited there. Just to precise there the miss of a column on the dataframe is on purpose we don't want dates when we compute VAR.
+```{r}
+var_model <- VAR(data_df_clean[, -1], p = optimal_p, type = "const")
+```
+
+Let's now compute Ganger causality test to see if the variables are causing each other.
+```{r}
+```
+
+### Granger Causality Test & Intuition
+The Granger causality test is a statistical hypothesis test for determining whether one time series is useful in forecasting another. Here we will test if the slope of the yield curve Granger causes the 10-Year Breakeven Inflation Rate and the VIX index, and vice versa.
+Let's recall that if the p-value is less than 0.05, we reject the null hypothesis and conclude that the first variable Granger causes the second variable. Else, we fail to reject the null hypothesis and conclude that the first variable does not Granger cause the second variable.
+```{r}
+grangertest(slope_yield_curve ~ breakeven_inflation, data = data_df_clean, order = optimal_p) # Slope of the Yield Curve -> 10-Year Breakeven Inflation Rate
+```
+Here the p-value = 0.8198 > 0.05, we fail to reject the null hypothesis and conclude that the slope of the yield curve does not Granger cause the 10-Year Breakeven Inflation Rate.
+```{r}
+grangertest(slope_yield_curve ~ vix_index, data = data_df_clean, order = optimal_p) # Slope of the Yield Curve -> VIX Index
+```
+Here the p-value = 0.1358 > 0.05, we fail to reject the null hypothesis and conclude that the slope of the yield curve does not Granger cause the VIX index.
+```{r}
+grangertest(breakeven_inflation ~ slope_yield_curve, data = data_df_clean, order = optimal_p) # 10-Year Breakeven Inflation Rate -> Slope of the Yield Curve
+```
+Here the p-value = 0.2834 > 0.05, we fail to reject the null hypothesis and conclude that the 10-Year Breakeven Inflation Rate does not Granger cause the slope of the yield curve.
+
+```{r}
+grangertest(breakeven_inflation ~ vix_index, data = data_df_clean, order = optimal_p) # 10-Year Breakeven Inflation Rate -> VIX Index
+```
+Here the p-value = 6.128e-05 < 0.05, we reject the null hypothesis and conclude that the 10-Year Breakeven Inflation Rate Granger causes the VIX index.
+```{r}
+grangertest(vix_index ~ slope_yield_curve, data = data_df_clean, order = optimal_p) # VIX Index -> Slope of the Yield Curve
+```
+Here the p-value = 0.1667 > 0.05, we fail to reject the null hypothesis and conclude that the VIX index does not Granger cause the slope of the yield curve.
+```{r}
+grangertest(vix_index ~ breakeven_inflation, data = data_df_clean, order = optimal_p) # VIX Index -> 10-Year Breakeven Inflation Rate
+```
+Here the p-value = 0.2934 > 0.05, we fail to reject the null hypothesis and conclude that the VIX index does not Granger cause the 10-Year Breakeven Inflation Rate.
+
+Here if we recall the definition of Granger causality, we can say that the 10-Year Breakeven Inflation Rate Granger causes the VIX index. This means that the 10-Year Breakeven Inflation Rate contains information that helps predict the VIX index. However, we cannot say the same for the other variables.
+As we observed the time series evolution first-hand we denoted 2 pics (2008 & 2021) that were symmetrical for the 10-Year Breakeven Inflation Rate and the VIX index. Our first intuition would have been to tell that this two results in the same periods must be dependent.
+Thanks to Granger test we can now conclude that it's true that this two event were dependent of each other but more in the sens whe the 10-Year Breakeven Inflation Rate was causing the VIX index.
+
+### Quality check of the model
+We will now perform a few diagnostic tests to ensure that our VAR model is a good fit for the data.
+Let's recall that : 
+
+- serial.test: This test checks for serial correlation in the model's residuals. Serial correlation means the errors from past time periods are related to current errors, which can violate model assumptions.
+
+- arch.test: This test investigates the presence of ARCH (Autoregressive Conditional Heteroskedasticity) effects. ARCH effects imply that the variance of the model's errors isn't constant but depends on the magnitude of previous errors.
+
+- stability: This function (potentially a custom function or package-specific) likely performs some kind of stability test on the VAR model. The specific details aren't shown, but it might involve analyzing the roots of the characteristic polynomial (as discussed previously) or other stability tests.
+```{r}
+serial.test(var_model)
+arch.test(var_model)
+stability(var_model)
+```
+
+Interpretation:
+
+- Serial Correlation: The p-value for the serial.test is extremely small (likely close to zero based on the scientific notation). This suggests a strong rejection of the null hypothesis (no serial correlation) and indicates the presence of serial correlation in the residuals. This is a concern, as it violates an assumption of the VAR model.
+
+- ARCH Effects: The p-value for the arch.test is also very small, suggesting a strong rejection of the null hypothesis (no ARCH effects). This implies the presence of ARCH effects, meaning the error variance is likely not constant. This can also be problematic for the VAR model.
+
+- Stability: The output for stability isn't provided, but it likely checks for issues like unit roots in the variables. Depending on the specific test used, it might also be related to the overall stability of the model's dynamics.
+
+Based on the significant serial correlation and ARCH effects, the diagnostic tests suggest that the current VAR model might not be a perfect fit for the data. These issues can lead to unreliable model estimates and potentially misleading inferences.
+
+### IRF Plot and Intuition
+We will now use the irf function to compute the impulse response functions (IRFs) for our VAR model. IRFs show the response of each variable in the model to a one-standard-deviation shock to one of the variables. This can help us understand the dynamic relationships between the variables in the model.
+```{r}
+irf.slope <- irf(var_model, impulse = "slope_yield_curve", response = c("breakeven_inflation", "vix_index"), n.ahead = 10)
+irf.breakeven <- irf(var_model, impulse = "breakeven_inflation", response = c("slope_yield_curve", "vix_index"), n.ahead = 10)
+irf.vix <- irf(var_model, impulse = "vix_index", response = c("breakeven_inflation", "slope_yield_curve"), n.ahead = 10)
+```
+We can now plot the impulse response functions for each pair of variables.
+```{r}
+plot(irf.slope, main = "Slope of the Yield Curve -> 10-Year Breakeven Inflation Rate & VIX Index")
+```
+We can observe that the Slope of the Yield as no impact on the 10-Year Breakeven Inflation Rate and has an impact on the VIX index. This is coherent with the Granger causality test we performed earlier.
+```{r}
+plot(irf.breakeven, main = "10-Year Breakeven Inflation Rate -> Slope of the Yield Curve &  VIX Index")
+```
+We can observe that the 10-Year Breakeven Inflation Rate has an impact on the VIX index and no impact on the Slope of the Yield Curve. This is coherent with the Granger causality test we performed earlier.
+```{r}
+plot(irf.vix, main = "VIX Index -> 10-Year Breakeven Inflation Rate & Slope of the Yield Curve")
+```
+We can observe that the VIX index has an impact on the 10-Year Breakeven Inflation Rate and  on the Slope of the Yield Curve. This is coherent with the Granger causality test we performed earlier.
+```{r}
+```
+
+### Forecasting and FEVD
+We will now use the predict function to forecast the future values of our variables using the VAR model. We will also use the fevd function to compute the forecast error variance decomposition (FEVD) for each variable in the model.
+```{r}
+fcast <- predict(var_model, n.ahead = 3, ci = 0.95)
+
+# Plot fan chart
+plot(fcast)
+
+# Forecast Error Variance Decomposition (FEVD)
+fevd(var_model, n.ahead = 10)
+```
+- As the theory was : that breakeven inflation has a negative correlated impact on the VIX index
+- Then we can conclude that : using forecast this trend is persistent and continue over our prediction.
+- Using our FEVD analysis we can comment that : This trend persists over time, with the 10-Year Breakeven Inflation Rate explaining a large portion of the forecast error variance in the VIX index. This suggests that the 10-Year Breakeven Inflation Rate is a key driver of the VIX index, and that changes in the 10-Year Breakeven Inflation Rate can have a significant impact on the VIX index.
+```{r}
+```
+
+### Restricted Model and IRF Analysis
+We will now use the restrict function to impose restrictions on our VAR model. We will then use the irf function to compute the impulse response functions (IRFs) for the restricted VAR model.
+```{r}
+restricted_model <- restrict(var_model, method = "manual", resmat = matrix(c(
+  1, 1, 1, 1, 0, 1, 1,
+  1, 1, 1, 1, 1, 0, 1,
+  1, 1, 1, 0, 0, 1, 1
+), nrow = 3, ncol = 7, byrow = TRUE))
+```
+Then we can compute once again the IRF for the restricted model.
+```{r}
+irf_restricted.slope <- irf(restricted_model, impulse = "slope_yield_curve", response = c("breakeven_inflation", "vix_index"), n.ahead = 10)
+irf_restricted.breakeven <- irf(restricted_model, impulse = "breakeven_inflation", response = c("slope_yield_curve", "vix_index"), n.ahead = 10)
+irf_restricted.vix <- irf(restricted_model, impulse = "vix_index", response = c("breakeven_inflation", "slope_yield_curve"), n.ahead = 10)
+```
+And then plot the IRF for the restricted model : 
+```{r}
+plot(irf_restricted.slope, main = "Slope of the Yield Curve -> 10-Year Breakeven Inflation Rate & VIX Index")
+```
+As we can see an impact only on the VIX index, this is coherent with the restriction we imposed on the model.
+```{r}
+plot(irf_restricted.breakeven, main = "10-Year Breakeven Inflation Rate -> Slope of the Yield Curve &  VIX Index")
+```
+As we can see an impact only on the VIX index, this is coherent with the restriction we imposed on the model.
+```{r}
+plot(irf_restricted.vix, main = "VIX Index -> 10-Year Breakeven Inflation Rate & Slope of the Yield Curve")
+```
+As we can see a double impact but now we reduce vix index impact on breakeven inflation this is due to our restricted model.
+```{r}
+```
+### Conclusion
+In this project, we used VAR model to analyze the relationships between the slope of the yield curve, the 10-Year Breakeven Inflation Rate, and the VIX index in the United States. We found that the slope of the yield curve and the 10-Year Breakeven Inflation Rate are stationary after differencing, while the VIX index is already stationary. We then selected the optimal lag order for the VAR model using information criteria and performed Granger causality tests to understand the dynamic relationships between the variables. We found that the 10-Year Breakeven Inflation Rate Granger causes the VIX index, but not the other way around. We also performed residual diagnostics to ensure that our VAR model is a good fit for the data. We found that the model has issues with serial correlation and ARCH effects, which can lead to unreliable model estimates. We then computed impulse response functions (IRFs) to understand the dynamic relationships between the variables and forecasted future values of the variables using the VAR model. Finally, we imposed restrictions on the VAR model and computed IRFs for the restricted model to understand the impact of the restrictions on the dynamic relationships between the variables. 
